@@ -38,4 +38,7 @@ void registerUser(User **head);
 // Chức năng Sign In
 void signIn(User **head);
 
+// Chức năng Search
+void searchUser(User *head);
+
 #endif

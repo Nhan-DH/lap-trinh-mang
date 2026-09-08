@@ -35,7 +35,7 @@ int main()
                 break;
 
             case 3:
-                printf("Search selected.\n");
+                searchUser(head);
                 break;
 
             case 4:

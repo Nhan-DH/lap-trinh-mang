@@ -4,6 +4,8 @@
 
 #include "user.h"
 
+static int isLoggedIn = 0;
+
 // tạo User mới
 User *createUser(const char *username,
                  const char *password,
@@ -263,6 +265,7 @@ void signIn(User **head)
         // 7. Kiểm tra password có đúng hay không
         if (strcmp(user->password, password) == 0)
         {
+            isLoggedIn = 1;
             printf("Login successful!\n");
             return;
         }
@@ -290,5 +293,34 @@ void signIn(User **head)
             return;
         }
     }
+}
+
+// Chức năng Search
+void searchUser(User *head)
+{
+    char username[USERNAME_SIZE];
+
+    printf("\n");
+    printf("===== SEARCH =====\n");
+
+    if (!isLoggedIn)
+    {
+        printf("Error: You must sign in first!\n");
+        return;
+    }
+
+    printf("Enter username: ");
+    scanf("%49s", username);
+
+    User *user = findUser(head, username);
+
+    if (user == NULL)
+    {
+        printf("Error: Username does not exist!\n");
+        return;
+    }
+
+    printf("Username: %s\n", user->username);
+    printf("Status: %s\n", user->status == 0 ? "active" : "blocked");
 }
 
