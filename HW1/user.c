@@ -44,7 +44,6 @@ void addUser(User **head, User *newUser)
     {
         current = current->next;
     }
-
     current->next = newUser;
 }
 
@@ -81,7 +80,6 @@ User *loadUsers(void)
 
         int status;
         float score;
-
         /*
          * Đọc dữ liệu theo dạng:
          * username:password:status:score

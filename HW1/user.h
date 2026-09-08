@@ -13,7 +13,8 @@ typedef struct User
 
     struct User *next;
 } User;
-/* Tạo User mới */
+
+// Tạo User mới
 User *createUser(const char *username,
                  const char *password,
                  int status,
