@@ -15,7 +15,7 @@ void showMenu()
 
 int main()
 {
-    User *head = NULL;
+    User *head = loadUsers();
     int choice;
 
     while (1)
@@ -31,7 +31,7 @@ int main()
                 break;
 
             case 2:
-                printf("Sign in selected.\n");
+               signIn(&head);
                 break;
 
             case 3:

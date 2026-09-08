@@ -14,6 +14,7 @@ typedef struct User
     struct User *next;
 } User;
 
+// ====Các hàm xử lý User===
 // Tạo User mới
 User *createUser(const char *username,
                  const char *password,
@@ -32,7 +33,12 @@ User *findUser(User *head, const char *username);
 // Lưu danh sách User vào user.txt
 int saveUsers(User *head);
 
+
+// ====Các hàm chức năng của chương trình===
 // Chức năng Register
 void registerUser(User **head);
+
+// Chức năng Sign In
+void signIn(User **head);
 
 #endif

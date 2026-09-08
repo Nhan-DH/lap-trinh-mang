@@ -85,7 +85,7 @@ User *loadUsers(void)
          * username:password:status:score
          */
         if (sscanf(line,
-                   "%49[^:]:%49[^:]:%d:%f",
+                 "%49[^:]:%49[^:]:%d:%f",
                    username,
                    password,
                    &status,
@@ -116,21 +116,47 @@ User *loadUsers(void)
     return head;
 }
 
+
+
 // tìm kiếm user theo username
 User *findUser(User *head, const char *username)
 {
-    User *current = head;
+    (void)head;
 
-    while (current != NULL)
+    FILE *file = fopen("user.txt", "r");
+
+    if (file == NULL)
     {
-        if (strcmp(current->username, username) == 0)
-        {
-            return current;
-        }
-
-        current = current->next;
+        return NULL;
     }
 
+    char line[200];
+
+    while (fgets(line, sizeof(line), file) != NULL)
+    {
+        char fileUsername[USERNAME_SIZE];
+        char password[PASSWORD_SIZE];
+        int status;
+        float score;
+
+        if (sscanf(line,
+                 "%49[^:]:%49[^:]:%d:%f",
+                   fileUsername,
+                   password,
+                   &status,
+                   &score) != 4)
+        {
+            continue;
+        }
+
+        if (strcmp(fileUsername, username) == 0)
+        {
+            fclose(file);
+            return createUser(fileUsername, password, status, score);
+        }
+    }
+
+    fclose(file);
     return NULL;
 }
 
@@ -180,8 +206,11 @@ void registerUser(User **head)
     printf("Enter username: ");
     scanf("%49s", username);
     // 2. Kiểm tra username đã tồn tại chưa
-    if (findUser(*head, username) != NULL)
+    User *existingUser = findUser(*head, username);
+
+    if (existingUser != NULL)
     {
+        free(existingUser);
         printf("Error: Username already exists!\n");
         return;
     }
@@ -216,3 +245,85 @@ void registerUser(User **head)
         printf("Error: Cannot save user to user.txt!\n");
     }
 }
+
+// Chức năng Sign In
+void signIn(User **head)
+{
+    char username[USERNAME_SIZE];
+    char password[PASSWORD_SIZE];
+
+    int wrongCounts = 0;
+
+    printf("\n");
+    printf("===== SIGN IN =====\n");
+
+    // 1. Nhập username
+    printf("Enter username: ");
+    scanf("%49s", username);
+
+    // 2. Tìm username trong user.txt
+    User *user = findUser(*head, username);
+
+    // 3. Nếu username không tồn tại
+    if (user == NULL)
+    {
+        printf("Error: Username does not exist!\n");
+        return;
+    }
+
+    // 4. Kiểm tra tài khoản có bị khóa hay không
+    if (user->status == 1)
+    {
+        free(user);
+        printf("Error: Account is blocked!\n");
+        return;
+    }
+    // 5. Cho phép người dùng nhập password
+    // Có thể nhập lại nếu password sai
+    while (wrongCounts <= 3)
+    {
+        // 6. Nhập password
+        printf("Enter password: ");
+        scanf("%49s", password);
+
+        // 7. Kiểm tra password có đúng hay không
+        if (strcmp(user->password, password) == 0)
+        {
+            free(user);
+            printf("Login successful!\n");
+            return;
+        }
+
+        // 8. Password sai → tăng số lần nhập sai
+        wrongCounts++;
+
+        printf("Error: Incorrect password!\n");
+        // 9. Nếu sai quá 3 lần → khóa tài khoản
+        if (wrongCounts > 3)
+        {
+            User *account = findUser(*head, username);
+
+            if (account != NULL)
+            {
+                account->status = 1;
+            }
+
+            user->status = 1;
+            // 10. Lưu trạng thái tài khoản vào file user.txt
+            if (saveUsers(*head))
+            {
+                free(user);
+                printf("Account has been blocked!\n");
+            }
+            else
+            {
+                free(user);
+                printf("Error: Cannot update user.txt!\n");
+            }
+            return;
+        }
+    }
+
+    free(user);
+}
+
