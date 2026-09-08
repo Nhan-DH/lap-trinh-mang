@@ -47,6 +47,24 @@ void addUser(User **head, User *newUser)
     current->next = newUser;
 }
 
+// tìm user trong linked list theo username
+static User *findUser(User *head, const char *username)
+{
+    User *current = head;
+
+    while (current != NULL)
+    {
+        if (strcmp(current->username, username) == 0)
+        {
+            return current;
+        }
+
+        current = current->next;
+    }
+
+    return NULL;
+}
+
 // đọc user từ file user.txt
 User *loadUsers(void)
 {
@@ -118,48 +136,6 @@ User *loadUsers(void)
 
 
 
-// tìm kiếm user theo username
-User *findUser(User *head, const char *username)
-{
-    (void)head;
-
-    FILE *file = fopen("user.txt", "r");
-
-    if (file == NULL)
-    {
-        return NULL;
-    }
-
-    char line[200];
-
-    while (fgets(line, sizeof(line), file) != NULL)
-    {
-        char fileUsername[USERNAME_SIZE];
-        char password[PASSWORD_SIZE];
-        int status;
-        float score;
-
-        if (sscanf(line,
-                 "%49[^:]:%49[^:]:%d:%f",
-                   fileUsername,
-                   password,
-                   &status,
-                   &score) != 4)
-        {
-            continue;
-        }
-
-        if (strcmp(fileUsername, username) == 0)
-        {
-            fclose(file);
-            return createUser(fileUsername, password, status, score);
-        }
-    }
-
-    fclose(file);
-    return NULL;
-}
-
 // Lưu danh sách User vào user.txt
 int saveUsers(User *head)
 {
@@ -210,7 +186,6 @@ void registerUser(User **head)
 
     if (existingUser != NULL)
     {
-        free(existingUser);
         printf("Error: Username already exists!\n");
         return;
     }
@@ -274,7 +249,6 @@ void signIn(User **head)
     // 4. Kiểm tra tài khoản có bị khóa hay không
     if (user->status == 1)
     {
-        free(user);
         printf("Error: Account is blocked!\n");
         return;
     }
@@ -289,7 +263,6 @@ void signIn(User **head)
         // 7. Kiểm tra password có đúng hay không
         if (strcmp(user->password, password) == 0)
         {
-            free(user);
             printf("Login successful!\n");
             return;
         }
@@ -301,29 +274,21 @@ void signIn(User **head)
         // 9. Nếu sai quá 3 lần → khóa tài khoản
         if (wrongCounts > 3)
         {
-            User *account = findUser(*head, username);
-
-            if (account != NULL)
+            if (user != NULL)
             {
-                account->status = 1;
+                user->status = 1;
             }
-
-            user->status = 1;
             // 10. Lưu trạng thái tài khoản vào file user.txt
             if (saveUsers(*head))
             {
-                free(user);
                 printf("Account has been blocked!\n");
             }
             else
             {
-                free(user);
                 printf("Error: Cannot update user.txt!\n");
             }
             return;
         }
     }
-
-    free(user);
 }
 

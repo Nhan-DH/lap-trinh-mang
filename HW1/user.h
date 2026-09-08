@@ -27,9 +27,6 @@ void addUser(User **head, User *newUser);
 // đọc user từ file user.txt
 User *loadUsers(void);
 
-// tìm kiếm user theo username
-User *findUser(User *head, const char *username);
-
 // Lưu danh sách User vào user.txt
 int saveUsers(User *head);
 
