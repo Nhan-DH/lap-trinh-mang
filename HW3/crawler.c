@@ -47,9 +47,9 @@ int crawl_website(const char *domain) {
     sort_string_list(&texts);
     sort_string_list(&videos);
 
-    if (write_csv("links.csv", "url", &links) != 0 ||
-        write_csv("texts.csv", "text", &texts) != 0 ||
-        write_csv("videos.csv", "video_url", &videos) != 0) {
+    if (write_csv("links.csv", &links) != 0 ||
+        write_csv("texts.csv", &texts) != 0 ||
+        write_csv("videos.csv", &videos) != 0) {
         goto cleanup;
     }
     result = 0;

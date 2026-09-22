@@ -62,13 +62,11 @@ int collect_nodes(xmlNode *node, const char *base_url,
 void sort_string_list(string_list_t *list);
 
 /**
- * @brief Ghi danh sach thanh CSV voi cot order va cot du lieu.
+ * @brief Ghi moi gia tri trong danh sach thanh mot dong cua file CSV.
  * @param[in] filename Ten file CSV can tao.
- * @param[in] header Ten cot du lieu.
  * @param[in] list Danh sach gia tri can ghi.
  * @return 0 neu ghi thanh cong; -1 neu khong mo duoc file.
  */
-int write_csv(const char *filename, const char *header,
-              const string_list_t *list);
+int write_csv(const char *filename, const string_list_t *list);
 
 #endif

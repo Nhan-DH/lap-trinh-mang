@@ -24,29 +24,16 @@ void sort_string_list(string_list_t *list) {
           first_letter_compare);
 }
 
-static void write_csv_value(FILE *file, const char *value) {
-    for (const char *cursor = value; *cursor != '\0'; cursor++) {
-        if (*cursor == '"') {
-            fputc('"', file);
-        }
-        fputc(*cursor, file);
-    }
-}
-
-/* Ghi CSV va escape dau nhay de text HTML khong lam hong cau truc cot. */
-int write_csv(const char *filename, const char *header,
-              const string_list_t *list) {
+/* Ghi raw value de ket qua khop format mau: moi muc chiem mot dong. */
+int write_csv(const char *filename, const string_list_t *list) {
     FILE *file = fopen(filename, "w");
 
     if (file == NULL) {
         return -1;
     }
 
-    fprintf(file, "order,%s\n", header);
     for (size_t i = 0; i < list->count; i++) {
-        fprintf(file, "%zu,\"", i + 1);
-        write_csv_value(file, list->items[i]);
-        fprintf(file, "\"\n");
+        fprintf(file, "%s\n", list->items[i]);
     }
 
     fclose(file);

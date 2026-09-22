@@ -14,7 +14,8 @@ static int is_tag(const xmlNode *node, const char *tag) {
 
 static int is_text_element(const xmlNode *node) {
     const char *tags[] = {
-        "title", "p", "h1", "h2", "h3", "h4", "h5", "h6", "li"
+        "title", "p", "h1", "h2", "h3", "h4", "h5", "h6", "li",
+        "a", "yt-formatted-string"
     };
 
     for (size_t i = 0; i < sizeof(tags) / sizeof(tags[0]); i++) {
