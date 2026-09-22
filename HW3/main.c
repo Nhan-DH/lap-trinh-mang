@@ -8,6 +8,7 @@
  */
 
 #include "resolver.h"
+#include "crawler.h"
 
 
 int main(int argc, char *argv[]) {
@@ -71,7 +72,15 @@ int main(int argc, char *argv[]) {
     /* Kiem tra noi dung nguoi lon qua Cloudflare Family Filter (1.1.1.3) */
     if (is_domain_blocked(domain)) {
         printf("This site is not for you!\n");
+        return 0;
     }
+
+    if (crawl_website(domain) != 0) {
+        fprintf(stderr, "Unable to crawl https://%s/\n", domain);
+        return 1;
+    }
+
+    printf("Crawl completed: links.csv, texts.csv, videos.csv\n");
 
     return 0;
 }

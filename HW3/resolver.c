@@ -168,41 +168,44 @@ void parse_dns_response(const unsigned char *buf, int len,
 int send_dns_query(const char *server_ip, const unsigned char *query,
                    int query_len, unsigned char *response,
                    int response_size) {
-    /* === SOCKET: Tao UDP socket ===
-     * DNS dung UDP port 53 cho query thong thuong. */
+    /* DNS uses UDP for ordinary queries, so one datagram fits one exchange. */
     int sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sockfd < 0) return -1;
 
-    /*
-     * Timeout bao ve chong block vinh vien.
-     * Sau TIMEOUT_SEC giay khong co response, recv() tra -1.
-     */
+    /* The timeout prevents recv() from blocking forever when UDP is dropped. */
     struct timeval tv = { .tv_sec = TIMEOUT_SEC, .tv_usec = 0 };
-    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO,
+                   &tv, sizeof(tv)) < 0) {
+        close(sockfd);
+        return -1;
+    }
 
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(DNS_PORT);
-    inet_pton(AF_INET, server_ip, &server_addr.sin_addr);
+    if (inet_pton(AF_INET, server_ip, &server_addr.sin_addr) != 1) {
+        close(sockfd);
+        return -1;
+    }
 
-    /* === CONNECT: Gan default destination cho UDP socket === */
+    /* connect() fixes the peer and lets recv() reject unrelated packets. */
     if (connect(sockfd, (struct sockaddr *)&server_addr,
                 sizeof(server_addr)) < 0) {
         close(sockfd);
         return -1;
     }
 
-    /* === SEND: Gui DNS query packet === */
+    /* UDP send is datagram-oriented; a short send means the query was not sent. */
     if (send(sockfd, query, query_len, 0) != query_len) {
         close(sockfd);
         return -1;
     }
 
-    /* === RECV: Nhan DNS response === */
+    /* The receive length is needed because DNS responses are binary packets. */
     int recv_len = recv(sockfd, response, response_size, 0);
 
-    /* === CLOSE: Giai phong file descriptor === */
+    /* close() also runs after timeout/error so every socket has one owner. */
     close(sockfd);
 
     return recv_len;
