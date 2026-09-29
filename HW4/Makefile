@@ -1,4 +1,5 @@
-CC = gccCFLAGS = -Wall -Wextra -O2
+CC = gcc
+CFLAGS = -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -D_GNU_SOURCE -O2
 
 all: server client
 
@@ -12,4 +13,3 @@ clean:
 	rm -f server client *.o
 
 .PHONY: all clean
--f $(SERVER) $(CLIENT) *.o

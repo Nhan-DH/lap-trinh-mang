@@ -1,46 +1,72 @@
 /*
- * UDP Echo Client
+ * UDP Chat Client
  * 
  * Mô tả:
- *   Chương trình UDP Client gửi một chuỗi văn bản do người dùng nhập từ bàn phím
- *   đến UDP Server (địa chỉ 127.0.0.1, cổng 5550), sau đó chờ nhận và hiển thị
- *   thông điệp phản hồi (echo) từ server.
+ *   Chương trình UDP Client gửi chuỗi do người dùng nhập tới UDP Server,
+ *   đồng thời nhận và hiển thị tin nhắn do client còn lại gửi qua server.
  */
 
-#include <stdio.h>          /* Thư viện vào/ra chuẩn: printf, perror, fgets */
-#include <stdlib.h>         /* Thư viện chuẩn: exit, malloc, free */
+#include <stdio.h>          /* Thư viện vào/ra chuẩn: printf, fprintf, perror, fgets */
+#include <stdlib.h>         /* Thư viện chuẩn: atoi(), exit(), mã kết thúc chương trình */
 #include <sys/types.h>      /* Các kiểu dữ liệu hệ thống */
 #include <sys/socket.h>     /* Các hàm và cấu trúc socket: socket, sendto, recvfrom */
 #include <netinet/in.h>     /* Các cấu trúc địa chỉ Internet: sockaddr_in, in_addr */
-#include <arpa/inet.h>      /* Các hàm chuyển đổi địa chỉ: htons, inet_addr */
-#include <string.h>         /* Thao tác chuỗi và bộ nhớ: memset, bzero, strlen */
-#include <unistd.h>         /* Các lời gọi hệ thống chuẩn: close */
+#include <arpa/inet.h>      /* inet_pton(), htons(): chuyển đổi IP và byte order */
+#include <string.h>         /* memset(), strlen(), strcmp(), strcspn() */
+#include <unistd.h>         /* close(): đóng file descriptor */
+#include <errno.h>          /* errno, EINTR: mã lỗi system call */
+#include <sys/select.h>     /* select(), fd_set: chờ nhiều nguồn dữ liệu */
 
+/* =========================================================================
+ * Phần 1: Khai báo hằng số sử dụng trong Client
+ * =========================================================================
+ */
 #define SERV_PORT 5550      /* Cổng của UDP Server cần kết nối */
 #define SERV_IP "127.0.0.1" /* Địa chỉ IP của Server (localhost) */
 #define BUFF_SIZE 1024      /* Kích thước bộ đệm chứa dữ liệu */
+#define CONNECT_TOKEN "__CONNECT__" /* Token đăng ký client với server */
+#define EXIT_TOKEN_AT "@"            /* Token kết thúc phiên dạng @ */
+#define EXIT_TOKEN_HASH "#"          /* Token kết thúc phiên dạng # */
+
+/* =========================================================================
+ * Phần 2: Hàm main - khởi tạo Client và trao đổi datagram UDP
+ * =========================================================================
+ */
 
 /**
- * @brief Hàm chính thực thi UDP Echo Client.
+ * @brief Hàm chính thực thi UDP Chat Client.
  * 
  * Chi tiết luồng xử lý:
- *   - Bước 1: Tạo socket UDP phía client với domain AF_INET và type SOCK_DGRAM.
- *   - Bước 2: Thiết lập thông tin địa chỉ server đích (IP SERV_IP, Port SERV_PORT).
- *   - Bước 3: Đọc chuỗi nhập từ bàn phím, gửi dữ liệu tới server qua sendto(),
- *             chờ nhận phản hồi qua recvfrom(), in kết quả và đóng socket.
+ *   - Bước 1: Kiểm tra IP/port, tạo socket UDP và thiết lập địa chỉ server.
+ *   - Bước 2: Gửi token kết nối bằng sendto().
+ *   - Bước 3: Dùng select() để chờ bàn phím hoặc datagram từ server.
+ *   - Bước 4: Gửi dữ liệu bằng sendto(), nhận dữ liệu bằng recvfrom().
+ *   - Bước 5: Gửi token '@' hoặc '#' và đóng socket để kết thúc.
  * 
- * @param Không có tham số đầu vào (void).
- * @return int:
- *   - Trả về 0 khi chương trình kết thúc thành công hoặc sau khi hoàn tất phiên gửi/nhận.
- *   - Thoát với exit(0) nếu xảy ra lỗi trong quá trình khởi tạo socket.
+ * @param argc Số lượng đối số dòng lệnh.
+ * @param argv argv[1] là địa chỉ IPv4 của server, argv[2] là port server.
+ * @return int Trả về 0 khi kết thúc phiên, khác 0 nếu có lỗi khởi tạo hoặc giao tiếp.
  */
-int main(void)
+int main(int argc, char *argv[])
 {
 	int client_sock;                 /* File descriptor của socket client */
 	char buff[BUFF_SIZE];            /* Bộ đệm chứa thông điệp gửi và nhận */
 	struct sockaddr_in server_addr;  /* Cấu trúc lưu thông tin địa chỉ server đích */
 	int bytes_sent, bytes_received;  /* Số byte thực tế đã gửi hoặc nhận */
 	socklen_t sin_size;              /* Kích thước của struct sockaddr_in */
+	fd_set read_fds;                 /* Tập descriptor chờ dữ liệu */
+	int server_port = SERV_PORT;       /* Port server, mặc định là SERV_PORT */
+
+	/* Xóa cấu trúc trước khi dùng inet_pton() để tránh dữ liệu chưa khởi tạo. */
+	memset(&server_addr, 0, sizeof(server_addr));
+	if (argc == 3) {
+		server_port = atoi(argv[2]);
+	}
+	if (argc != 3 || server_port < 1 || server_port > 65535 ||
+	    inet_pton(AF_INET, argv[1], &server_addr.sin_addr) != 1) {
+		fprintf(stderr, "Usage: %s <IPAddress> <PortNumber>\n", argv[0]);
+		return 1;
+	}
 	
 	/* =========================================================================
 	 * Step 1: Khởi tạo socket UDP
@@ -66,69 +92,108 @@ int main(void)
 	 *   - sin_port = htons(SERV_PORT): Chuyển port từ định dạng máy chủ sang mạng.
 	 *   - sin_addr.s_addr = inet_addr(SERV_IP): Chuyển chuỗi IP "127.0.0.1" sang số nguyên 32-bit (network byte order).
 	 */
-	bzero(&server_addr, sizeof(server_addr));
 	server_addr.sin_family = AF_INET;
-	server_addr.sin_port = htons(SERV_PORT);
-	server_addr.sin_addr.s_addr = inet_addr(SERV_IP);
+	server_addr.sin_port = htons(server_port);
+	/* htons(): đổi port từ host byte order sang network byte order. */
 	
 	/* =========================================================================
-	 * Step 3: Giao tiếp với Server (Gửi chuỗi và nhận lại phản hồi)
+	 * Step 3: Gửi token đăng ký tới Server
 	 * =========================================================================
 	 */
-	printf("\nType to send: ");
-	memset(buff, 0, sizeof(buff));       /* Khởi tạo toàn bộ bộ đệm về ký tự null '\0' */
-	if (fgets(buff, BUFF_SIZE, stdin) == NULL) {
-		close(client_sock);
-		return 0;
-	}
-	
 	sin_size = sizeof(struct sockaddr_in);
-	
 	/*
-	 * Hàm sendto(): Gửi gói tin dữ liệu tới server qua UDP.
-	 * (Lưu ý: UDP là giao thức phi kết nối nên sử dụng sendto thay vì send thông thường).
+	 * Hàm sendto(): Gửi token kết nối tới server qua UDP.
 	 *   - Vào:
 	 *       + client_sock: Socket descriptor của client.
-	 *       + buff: Con trỏ vùng đệm chứa nội dung cần gửi.
-	 *       + strlen(buff): Số lượng byte cần gửi đi.
+	 *       + CONNECT_TOKEN: Chuỗi điều khiển cần gửi.
+	 *       + strlen(CONNECT_TOKEN): Số byte của token, không gửi '\0'.
 	 *       + 0: Cờ gửi tin mặc định.
-	 *       + (struct sockaddr*)&server_addr: Địa chỉ đích của server.
-	 *       + sin_size: Kích thước của struct server_addr.
-	 *   - Ra: 
-	 *       + Số byte gửi thành công.
-	 *       + < 0 nếu có lỗi khi gửi.
+	 *       + (struct sockaddr *)&server_addr: Địa chỉ server đích.
+	 *       + sin_size: Kích thước cấu trúc địa chỉ server.
+	 *   - Ra: Số byte đã gửi hoặc -1 nếu xảy ra lỗi.
 	 */
-	bytes_sent = sendto(client_sock, buff, strlen(buff), 0, (struct sockaddr *)&server_addr, sin_size);
+	bytes_sent = sendto(client_sock, CONNECT_TOKEN, strlen(CONNECT_TOKEN), 0,
+	                    (struct sockaddr *)&server_addr, sin_size);
 	if (bytes_sent < 0) {
 		perror("Error: ");
 		close(client_sock);
-		return 0;
+		return 1;
 	}
 
-	/*
-	 * Hàm recvfrom(): Chờ nhận gói tin phản hồi từ Server.
-	 *   - Vào:
-	 *       + client_sock: Socket descriptor của client.
-	 *       + buff: Con trỏ vùng đệm lưu dữ liệu nhận về.
-	 *       + BUFF_SIZE - 1: Số byte tối đa đọc vào (để chừa 1 byte kết thúc chuỗi '\0').
-	 *       + 0: Cờ nhận tin mặc định.
-	 *       + (struct sockaddr*)&server_addr: Nơi lưu địa chỉ server phản hồi.
-	 *       + &sin_size: Con trỏ kích thước của struct server_addr.
-	 *   - Ra:
-	 *       + Số byte nhận được thực tế.
-	 *       + < 0 nếu có lỗi khi nhận.
+	/* =========================================================================
+	 * Step 4: Giao tiếp hai chiều với Server
+	 * =========================================================================
+	 *
+	 * Hàm select(): Chờ đồng thời dữ liệu từ bàn phím và socket UDP.
+	 *   - FD_SET(STDIN_FILENO): Theo dõi khi người dùng nhập dữ liệu.
+	 *   - FD_SET(client_sock): Theo dõi khi server gửi datagram tới client.
+	 *   - client_sock + 1: Giá trị lớn nhất trong tập descriptor cộng 1.
+	 *   - NULL ở các tập ghi, lỗi và timeout: Chỉ quan tâm descriptor đọc.
+	 *   - Ra: Số descriptor sẵn sàng; -1 nếu lỗi và errno cho biết nguyên nhân.
+	 *
+	 * select() không thay thế UDP. Nó chỉ giúp chương trình biết thời điểm
+	 * an toàn để gọi fgets() hoặc recvfrom(), nhờ đó chat có thể hai chiều.
 	 */
-	bytes_received = recvfrom(client_sock, buff, BUFF_SIZE - 1, 0, (struct sockaddr *)&server_addr, &sin_size);
-	if (bytes_received < 0) {
-		perror("Error: ");
-		close(client_sock);
-		return 0;
+	while (1) {
+		FD_ZERO(&read_fds);
+		FD_SET(STDIN_FILENO, &read_fds);
+		FD_SET(client_sock, &read_fds);
+		if (select(client_sock + 1, &read_fds, NULL, NULL, NULL) < 0) {
+			if (errno == EINTR) {
+				continue;
+			}
+			perror("select");
+			break;
+		}
+		if (FD_ISSET(client_sock, &read_fds)) {
+			/*
+			 * Hàm recvfrom(): Nhận một UDP datagram từ server.
+			 *   - client_sock: Socket nhận dữ liệu.
+			 *   - buff: Bộ đệm lưu payload; chừa 1 byte cho '\0'.
+			 *   - BUFF_SIZE - 1: Số byte tối đa được phép ghi vào buff.
+			 *   - 0: Không dùng cờ đặc biệt.
+			 *   - NULL, NULL: Không cần lưu lại địa chỉ nguồn vì đã biết server.
+			 *   - Ra: Số byte nhận được hoặc -1 nếu xảy ra lỗi.
+			 */
+			bytes_received = recvfrom(client_sock, buff, BUFF_SIZE - 1, 0, NULL, NULL);
+			if (bytes_received < 0) {
+				perror("recvfrom");
+				break;
+			}
+			buff[bytes_received] = '\0';
+			printf("%s\n", buff);
+			fflush(stdout);
+		}
+		if (FD_ISSET(STDIN_FILENO, &read_fds)) {
+			if (fgets(buff, BUFF_SIZE, stdin) == NULL) {
+				break;
+			}
+			buff[strcspn(buff, "\r\n")] = '\0';
+			if (strcmp(buff, EXIT_TOKEN_AT) == 0 || strcmp(buff, EXIT_TOKEN_HASH) == 0) {
+				/* Gửi token thoát để server giải phóng slot của client này. */
+				(void)sendto(client_sock, buff, strlen(buff), 0,
+				             (struct sockaddr *)&server_addr, sin_size);
+				close(client_sock);
+				return 0;
+			}
+			/*
+			 * Hàm sendto(): Gửi nội dung người dùng nhập tới server qua UDP.
+			 *   - buff: Payload cần gửi; strlen(buff) không bao gồm '\0'.
+			 *   - server_addr: Địa chỉ IPv4 và port đích.
+			 *   - Ra: Số byte đã gửi hoặc -1 nếu xảy ra lỗi.
+			 */
+			if (sendto(client_sock, buff, strlen(buff), 0,
+			           (struct sockaddr *)&server_addr, sin_size) < 0) {
+				perror("sendto");
+				break;
+			}
+		}
 	}
 
-	buff[bytes_received] = '\0';        /* Đảm bảo chuỗi nhận được kết thúc an toàn */
-	printf("Reply from server: %s", buff);
-		
-	/* Đóng socket sau khi trao đổi dữ liệu hoàn tất */
+	/* =========================================================================
+	 * Step 5: Đóng socket và kết thúc Client
+	 * =========================================================================
+	 */
 	close(client_sock);
 	return 0;
 }
