@@ -1,0 +1,3 @@
+Hello! This is a sample text file for HW6 - IT4062.
+TCP Socket Network Programming - File Transfer.
+Line 3: 0123456789 ABCDEFGHIJ

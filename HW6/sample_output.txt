@@ -1,0 +1,83 @@
+================================================================================
+SAMPLE RUN OUTPUT (HW6 - IT4062: TCP MD5 STRING & FILE TRANSFER)
+================================================================================
+
+--------------------------------------------------------------------------------
+SERVER LOG (Terminal 1: ./server 5500)
+--------------------------------------------------------------------------------
+TCP server started at port 5500. Waiting for clients...
+[127.0.0.1:50998] Client connected.
+[127.0.0.1:50998] Received string: "hust"
+    MD5          : E5F981B4FA005CB38EA23777166BC34B
+    Letters      : EFBFACBEABCB
+    Digits       : 59814005382377716634
+[127.0.0.1:50998] Received string: "1a2b3cd"
+    MD5          : 2B7E3B1FB3C0C8F86C5246B901B99DF3
+    Letters      : BEBFBCCFCBBDF
+    Digits       : 2731308865246901993
+[127.0.0.1:50998] Received string: "Ab15CD$"
+    -> Error: String contains non-alphanumeric characters. Error message sent.
+[127.0.0.1:50998] Received file: "sample_text.txt"
+    Saved at    : received_files/127.0.0.1_50998_sample_text.txt
+    File size   : 130 bytes
+    ----------------------- FILE CONTENT -----------------------
+Hello! This is a sample text file for HW6 - IT4062.
+TCP Socket Network Programming - File Transfer.
+Line 3: 0123456789 ABCDEFGHIJ
+    ----------------------- END CONTENT ------------------------
+    MD5         : 575D5A537A860877D481B00CDAAAD975
+[127.0.0.1:50998] Received file: "server"
+    Saved at    : received_files/127.0.0.1_50998_server
+    File size   : 35096 bytes
+    MD5         : 32A4FE8205C8EFDAA8D003CBB13532A1
+[127.0.0.1:50998] Client disconnected.
+
+--------------------------------------------------------------------------------
+CLIENT CONSOLE (Terminal 2: ./client 127.0.0.1 5500)
+--------------------------------------------------------------------------------
+
+MENU
+-----------------------------------
+1. Send any string
+2. Send file content
+3. Exit
+Your choice: 1
+Enter string: hust
+Letters: EFBFACBEABCB
+Digits : 59814005382377716634
+Check  : Match
+Enter string: 1a2b3cd
+Letters: BEBFBCCFCBBDF
+Digits : 2731308865246901993
+Check  : Match
+Enter string: Ab15CD$
+Error: String contains non-alphanumeric characters
+Enter string: 
+
+MENU
+-----------------------------------
+1. Send any string
+2. Send file content
+3. Exit
+Your choice: 2
+Enter file path: sample_text.txt
+Sent 130 bytes of file 'sample_text.txt' to server.
+MD5: 575D5A537A860877D481B00CDAAAD975
+Check: Match
+
+MENU
+-----------------------------------
+1. Send any string
+2. Send file content
+3. Exit
+Your choice: 2
+Enter file path: non_existent.txt
+Error: File 'non_existent.txt' not found.
+
+MENU
+-----------------------------------
+1. Send any string
+2. Send file content
+3. Exit
+Your choice: 3
+Connection closed. Goodbye!
