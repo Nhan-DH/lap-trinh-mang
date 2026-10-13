@@ -1,3 +1,18 @@
+/*
+ * TCP File/String Client (HW6 - IT4062)
+ *
+ * Cách chạy:
+ *     ./client IPAddress PortNumber
+ * Ví dụ:
+ *     ./client 127.0.0.1 5500
+ *
+ * Chức năng:
+ *   - Kết nối tới TCP server qua địa chỉ IPv4 và cổng được chỉ định.
+ *   - Gửi chuỗi chỉ gồm chữ cái và chữ số; nhận phần chữ/số của MD5.
+ *   - Gửi file nhị phân theo từng chunk và nhận MD5 do server tính.
+ *   - Tự tính MD5 ở client để kiểm tra dữ liệu truyền có toàn vẹn không.
+ */
+
 #include "md5.h"                   /* Hàm gọi md5sum để tính MD5. */
 #include "protocol.h"              /* Hàm send_all, recv_line và hằng số. */
 
@@ -11,13 +26,43 @@
 #include <sys/stat.h>              /* stat và S_ISREG. */
 #include <unistd.h>                /* close. */
 
+/**
+ * @brief Xóa ký tự newline ở cuối chuỗi đọc bằng fgets().
+ *
+ * fgets() thường giữ lại '\n' khi người dùng nhấn Enter. Hàm thay ký tự
+ * newline đầu tiên tìm thấy bằng '\0', nhờ đó chuỗi có thể gửi qua TCP
+ * mà không chứa phần kết thúc dòng của giao diện nhập liệu.
+ *
+ * @param[in,out] text Bộ đệm chuỗi kết thúc bằng '\0'; không được NULL.
+ */
 static void remove_newline(char *text)
 {
+    /*
+     * fgets() giữ lại ký tự '\n' khi người dùng nhấn Enter.
+     * Hàm này loại bỏ ký tự đó để chuỗi chỉ còn dữ liệu người dùng nhập.
+     */
     text[strcspn(text, "\n")] = '\0'; /* Xóa newline do fgets giữ lại. */
 }
 
+/**
+ * @brief Tách chuỗi MD5 thành phần chữ và phần số.
+ *
+ * MD5 được in dưới dạng 32 ký tự hex in hoa. Các ký tự A-F được ghi vào
+ * @p letters, còn các ký tự 0-9 được ghi vào @p digits. Cả hai kết quả
+ * đều được kết thúc bằng '\0' để dùng như chuỗi C thông thường.
+ *
+ * @param[in]  md5     Chuỗi MD5 hex hợp lệ.
+ * @param[out] letters Bộ đệm nhận các ký tự A-F.
+ * @param[out] digits  Bộ đệm nhận các ký tự 0-9.
+ */
 static void split_md5(const char *md5, char *letters, char *digits)
 {
+    /*
+     * Tách chuỗi MD5 in hoa thành hai chuỗi:
+     * - letters: các ký tự A-F;
+     * - digits: các ký tự 0-9.
+     * Hai chuỗi này được dùng để đối chiếu với phản hồi của server.
+     */
     size_t letter_count = 0;       /* Số chữ cái đã tách. */
     size_t digit_count = 0;        /* Số chữ số đã tách. */
     size_t i;                      /* Chỉ số chuỗi MD5. */
@@ -32,8 +77,29 @@ static void split_md5(const char *md5, char *letters, char *digits)
     digits[digit_count] = '\0';
 }
 
+/**
+ * @brief Gửi một chuỗi và kiểm tra phản hồi MD5 từ server.
+ *
+ * Giao thức gửi gồm header "STR <length>\n" rồi đến đúng @p length byte
+ * nội dung. Server trả hai dòng chứa phần chữ và phần số của MD5. Nếu
+ * server báo lỗi dữ liệu, hàm in lỗi và giữ kết nối để client tiếp tục.
+ *
+ * @param[in] sockfd Socket TCP đã connect tới server.
+ * @param[in] text   Chuỗi cần gửi, không chứa newline cuối.
+ *
+ * @return `0` khi request đã được xử lý, kể cả server trả lỗi dữ liệu;
+ *         `-1` khi gửi hoặc nhận qua socket thất bại.
+ */
 static int send_string(int sockfd, const char *text)
 {
+    /*
+     * Gửi một chuỗi theo giao thức:
+     *   STR <độ dài>\n
+     *   <nội dung chuỗi>
+     * Sau đó nhận hai dòng kết quả từ server và so sánh với MD5 tự tính.
+     * Trả 0 nếu xử lý xong hoặc server báo lỗi dữ liệu; trả -1 nếu
+     * kết nối/giao tiếp TCP thất bại.
+     */
     char header[64];                /* Header STR <len>\n. */
     char letters[MD5_DIGEST_LENGTH * 2 + 1]; /* Chữ client tự tách. */
     char digits[MD5_DIGEST_LENGTH * 2 + 1];  /* Số client tự tách. */
@@ -77,8 +143,27 @@ static int send_string(int sockfd, const char *text)
     return 0;
 }
 
+/**
+ * @brief Gửi một file và đối chiếu MD5 với server.
+ *
+ * Hàm kiểm tra file thường và giới hạn kích thước trước khi mở. Sau đó
+ * gửi header "FILE <size> <name>\n", truyền nội dung theo từng chunk,
+ * đồng thời cập nhật MD5 cục bộ. Cuối cùng, MD5 cục bộ được so sánh với
+ * MD5 server gửi về.
+ *
+ * @param[in] sockfd Socket TCP đã connect tới server.
+ * @param[in] path   Đường dẫn file nguồn trên máy client.
+ *
+ * @return `0` khi file không hợp lệ hoặc request hoàn tất;
+ *         `-1` khi lỗi mở file hoặc lỗi giao tiếp TCP.
+ */
 static int send_file(int sockfd, const char *path)
 {
+    /*
+     * Kiểm tra file cục bộ, gửi metadata rồi gửi nội dung theo từng chunk.
+     * Trong lúc gửi, client đồng thời tính MD5 của file nguồn để so sánh
+     * với MD5 do server tính trên file đã nhận.
+     */
     struct stat info;               /* Metadata tệp từ stat. */
     FILE *input;                    /* Tệp mở nhị phân để fread. */
     const char *filename;           /* Basename gửi trong header. */
@@ -148,8 +233,15 @@ static int send_file(int sockfd, const char *path)
     return 0;
 }
 
+/**
+ * @brief In menu thao tác của client.
+ *
+ * Lựa chọn 1 vào chế độ gửi nhiều chuỗi, lựa chọn 2 gửi một file,
+ * còn lựa chọn 3 đóng socket và kết thúc chương trình.
+ */
 static void print_menu(void)
 {
+    /* Hiển thị ba thao tác mà client hỗ trợ cho người dùng. */
     printf("\nMENU\n-----------------------------------\n"
            "1. Send any string\n"
            "2. Send file content\n"
@@ -235,10 +327,12 @@ int main(int argc, char *argv[])
     for (;;) {
         print_menu();
         if (fgets(input, sizeof(input), stdin) == NULL) {
+            /* EOF từ stdin được coi là yêu cầu đóng phiên bình thường. */
             printf("Connection closed. Goodbye!\n");
             break;
         }
         if (input[0] == '1') {
+            /* Cho phép gửi nhiều chuỗi liên tiếp; chuỗi rỗng kết thúc mode 1. */
             for (;;) {
                 printf("Enter string: ");
                 if (fgets(input, sizeof(input), stdin) == NULL) {
@@ -254,6 +348,7 @@ int main(int argc, char *argv[])
                 }
             }
         } else if (input[0] == '2') {
+            /* Mỗi lần chọn mode 2 chỉ gửi một file rồi quay lại menu. */
             printf("Enter file path: ");
             if (fgets(input, sizeof(input), stdin) == NULL) {
                 goto done;
@@ -264,6 +359,7 @@ int main(int argc, char *argv[])
                 goto error;
             }
         } else if (input[0] == '3') {
+            /* Người dùng chủ động kết thúc phiên TCP. */
             printf("Connection closed. Goodbye!\n");
             break;
         } else {

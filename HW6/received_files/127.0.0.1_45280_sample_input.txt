@@ -1,0 +1,14 @@
+1
+hust
+1a2b3cd
+123
+abcd
+Ab15CD$
+
+2
+sample_text.txt
+2
+sample_image.png
+2
+khong_ton_tai.txt
+3
