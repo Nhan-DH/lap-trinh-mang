@@ -1,21 +1,37 @@
-/* net.c - lop nhap/xuat tren TCP stream. SINH VIEN CAI DAT cac ham duoi day.
- * Xem mo ta khung tin trong de bai (muc 3) va khai bao trong proto.h. */
+/*
+ * net.c - Tang dong goi frame tren TCP stream cua HW7.
+ *
+ * TCP khong bao toan ranh gioi message, vi vay file nay cung cap cac ham
+ * gui/nhan du byte, tao frame nhi phan big-endian va kiem tra CRC32.
+ */
 #define _GNU_SOURCE
-#include "proto.h"
-#include <errno.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include "proto.h"          /* Hieu uoc frame va khai bao ham dung chung */
+#include <errno.h>          /* Ma loi errno va EINTR */
+#include <string.h>         /* memmove dung khi dong goi payload */
+#include <sys/socket.h>     /* send, recv va cac hang so socket */
+#include <unistd.h>         /* Cac ham he thong POSIX */
 
-/* Gui du n byte. Xu ly gui thieu (send tra ve < n) va EINTR.
- * Dung MSG_NOSIGNAL de khong bi SIGPIPE.
- * Tra ve n neu thanh cong, -1 neu loi. */
+/**
+ * @brief Gui du n byte qua TCP.
+ * @param fd Socket TCP.
+ * @param buf Vung du lieu can gui.
+ * @param n So byte can gui.
+ * @return n neu thanh cong, -1 neu gap loi.
+ */
 ssize_t send_all(int fd, const void *buf, size_t n)
 {
     const uint8_t *data = buf;
     size_t total = 0;
 
     while (total < n) {
+        /*
+         * Hàm send(): gửi một phần hoặc toàn bộ dữ liệu qua socket TCP.
+         *   - fd: file descriptor của socket đã kết nối.
+         *   - data + total: vùng dữ liệu chưa gửi.
+         *   - n - total: số byte còn lại cần gửi.
+         *   - MSG_NOSIGNAL: không phát sinh SIGPIPE khi peer đã đóng.
+         *   - Giá trị trả về: số byte đã gửi, hoặc -1 nếu lỗi.
+         */
         ssize_t sent = send(fd, data + total, n - total, MSG_NOSIGNAL);
         if (sent < 0) {
             if (errno == EINTR) {
@@ -31,15 +47,29 @@ ssize_t send_all(int fd, const void *buf, size_t n)
     return (ssize_t)total;
 }
 
-/* Nhan du n byte. Xu ly nhan thieu va EINTR.
- * Tra ve: n neu du; 0 neu doi phuong dong ket noi truoc khi gui byte nao;
- *         -1 neu loi hoac doi phuong dong giua chung. */
+/**
+ * @brief Nhan du n byte qua TCP.
+ * @param[in] fd Socket TCP.
+ * @param[out] buf Bo dem nhan du lieu.
+ * @param[in] n So byte can nhan.
+ * @return n neu nhan du, 0 neu peer dong ngay tu dau, -1 neu dong giua chung
+ *         hoac gap loi I/O.
+ */
 ssize_t recv_all(int fd, void *buf, size_t n)
 {
     uint8_t *data = buf;
     size_t total = 0;
 
     while (total < n) {
+        /*
+         * Hàm recv(): nhận dữ liệu từ socket TCP.
+         *   - fd: file descriptor của socket đã kết nối.
+         *   - data + total: vùng nhớ ghi dữ liệu nhận được.
+         *   - n - total: số byte tối đa cần nhận.
+         *   - 0: không dùng cờ đặc biệt.
+         *   - Giá trị trả về: số byte nhận được, 0 khi peer đóng,
+         *     hoặc -1 nếu xảy ra lỗi.
+         */
         ssize_t received = recv(fd, data + total, n - total, 0);
         if (received < 0) {
             if (errno == EINTR) {
@@ -55,10 +85,18 @@ ssize_t recv_all(int fd, void *buf, size_t n)
     return (ssize_t)total;
 }
 
-/* Dung khung vao out: header 16 byte (big-endian) + payload.
- * CRC32 tinh tren 12 byte dau cua header noi voi payload (xem de bai),
- * ghi vao byte 12..15. Tra ve tong so byte cua khung.
- * Luu y: payload co the trung vung nho voi out + HDR_LEN (dung memmove). */
+/**
+ * @brief Tao mot frame gom header 16 byte va payload.
+ * @param[out] out Bo dem nhan frame, phai du HDR_LEN + len byte.
+ * @param[in] type Loai frame trong enum frame_type.
+ * @param[in] wnd Cua so nhan server quang ba cho client.
+ * @param[in] seq So thu tu cua frame hoac chunk.
+ * @param[in] payload Du lieu ung dung can dong goi, co the NULL neu len = 0.
+ * @param[in] len So byte payload.
+ * @return Tong kich thuoc frame; 0 neu tham so khong hop le.
+ *
+ * CRC duoc tinh tren 12 byte dau header noi voi payload.
+ */
 size_t build_frame(uint8_t *out, uint8_t type, uint16_t wnd, uint32_t seq,
                    const void *payload, uint32_t len)
 {
@@ -81,7 +119,16 @@ size_t build_frame(uint8_t *out, uint8_t type, uint16_t wnd, uint32_t seq,
     return HDR_LEN + (size_t)len;
 }
 
-/* Dung khung roi gui bang send_all. Tra ve 0 neu thanh cong, -1 neu loi. */
+/**
+ * @brief Tao va gui tron mot frame qua socket.
+ * @param[in] fd Socket TCP da ket noi.
+ * @param[in] type Loai frame trong enum frame_type.
+ * @param[in] wnd Cua so nhan can quang ba.
+ * @param[in] seq So thu tu frame.
+ * @param[in] payload Payload can gui.
+ * @param[in] len So byte payload.
+ * @return 0 neu thanh cong, -1 neu frame khong hop le hoac gui loi.
+ */
 int send_frame(int fd, uint8_t type, uint16_t wnd, uint32_t seq,
                const void *payload, uint32_t len)
 {
@@ -95,10 +142,14 @@ int send_frame(int fd, uint8_t type, uint16_t wnd, uint32_t seq,
     return send_all(fd, frame, frame_len) < 0 ? -1 : 0;
 }
 
-/* Nhan tron mot khung: doc 16 byte header, doc len byte payload (vao payload,
- * bo dem toi thieu MAX_PAYLOAD + 1 byte), kiem tra CRC32.
- * Ma tra ve: RF_OK, RF_EOF, RF_ERR, RF_CRC, RF_PROTO (xem proto.h).
- * Voi RF_CRC phai da doc het payload de luong byte khong bi lech khung. */
+/**
+ * @brief Nhan, giai ma va kiem tra CRC cua mot frame.
+ * @param[in] fd Socket TCP da ket noi.
+ * @param[out] h Header da giai ma.
+ * @param[out] payload Bo dem nhan payload.
+ * Payload van duoc doc het truoc khi tra RF_CRC de giu TCP stream dong bo.
+ * @return RF_OK, RF_EOF, RF_ERR, RF_CRC hoac RF_PROTO.
+ */
 int recv_frame(int fd, frame_hdr_t *h, uint8_t *payload)
 {
     uint8_t header[HDR_LEN];
