@@ -1,37 +1,33 @@
-/*
- * server.c - HW7 TCP server.
- *
- * Server fork mot tien trinh cho moi client, xu ly chuoi va nhan file lon
- * bang buffer vong. Moi chunk duoc kiem tra CRC o tang frame, xac nhan bang
- * ACK tich luy va ghi xuong dia theo dung thu tu.
- */
+/* Server TCP HW7: xử lý chuỗi và truyền tệp tin cậy. */
 #define _GNU_SOURCE
-#include "proto.h"          /* Hieu uoc frame va ham MD5/CRC dung chung */
+#include "proto.h"          /* Hiệp ước frame và các tiện ích dùng chung. */
 
-#include <arpa/inet.h>      /* inet_ntop va htons/ntohs cho IPv4 */
-#include <ctype.h>          /* isalnum kiem tra chuoi hop le */
-#include <errno.h>          /* errno, EINTR va EEXIST */
-#include <netinet/in.h>     /* struct sockaddr_in va INADDR_ANY */
-#include <poll.h>           /* poll tao idle timeout cho client */
-#include <signal.h>         /* signal, SIGCHLD, SIGPIPE */
-#include <stdio.h>          /* printf, fprintf, fopen, fwrite, perror */
-#include <stdlib.h>         /* strtoul, calloc, malloc va EXIT_* */
-#include <string.h>         /* memset, memcpy, strlen, snprintf */
-#include <sys/socket.h>     /* socket, setsockopt, bind, listen, accept */
-#include <sys/stat.h>       /* mkdir tao thu muc received_files */
-#include <sys/types.h>      /* kieu pid_t va socklen_t */
-#include <sys/wait.h>       /* waitpid thu don tien trinh con */
-#include <unistd.h>         /* close, fork, unlink, usleep */
+#include <arpa/inet.h>      /* Thư viện địa chỉ IPv4. */
+#include <ctype.h>          /* Kiểm tra ký tự chữ và số. */
+#include <errno.h>          /* Mã lỗi hệ thống. */
+#include <netinet/in.h>     /* Cấu trúc địa chỉ IPv4. */
+#include <netinet/tcp.h>    /* Tối ưu frame ACK ngắn bằng TCP_NODELAY. */
+#include <poll.h>           /* Chờ dữ liệu trên socket. */
+#include <signal.h>         /* Tín hiệu tiến trình. */
+#include <stdio.h>          /* Nhập xuất chuẩn. */
+#include <stdlib.h>         /* Cấp phát bộ nhớ và chuyển đổi số. */
+#include <string.h>         /* Xử lý chuỗi. */
+#include <sys/socket.h>     /* Gọi hệ thống socket. */
+#include <sys/stat.h>       /* Thông tin tệp và thư mục. */
+#include <sys/types.h>      /* Kiểu dữ liệu hệ thống. */
+#include <sys/wait.h>       /* Thu dọn tiến trình con. */
+#include <unistd.h>         /* Các lời gọi hệ thống POSIX. */
 
 typedef struct {
-    /* Mot o trong buffer vong, co the chua chunk den sai thu tu. */
+    /* Một ô của bộ đệm vòng, có thể chứa chunk sai thứ tự. */
     uint8_t *data;
     size_t len;
+    uint32_t seq; /* Trạng thái của một tệp đang được nhận. */
     int present;
 } slot_t;
 
 typedef struct {
-    /* Trang thai cua mot file dang duoc nhan tu client. */
+    /* Các bộ đếm thống kê của giao dịch. */
     int fd;
     uint64_t size;
     uint32_t total;
@@ -44,12 +40,19 @@ typedef struct {
     FILE *file;
     md5_t *md5;
     char path[512];
+    uint32_t received_chunks; /* Phân tích tham số trong khoảng cho phép. */
+    uint32_t duplicate_chunks; /* Kiểm tra chuỗi chỉ gồm chữ và số ASCII. */
+    uint32_t out_of_order; /* Tính MD5 chuỗi và gửi kết quả. */
+    uint32_t bad_crc; /* Kiểm tra tên tệp an toàn, không chứa path traversal. */
+    uint32_t outside_window; /* Giải phóng trạng thái truyền tệp. */
+    uint32_t buffered_chunks; /* Khởi tạo tệp đích và bộ đệm vòng. */
+    uint32_t peak_buffered; /* Gửi ACK tích lũy và cửa sổ còn tr?ng. */
+    uint32_t acks_sent; /* Ghi các chunk đã đủ và cập nhật MD5. */
+    uint32_t acks_dropped; /* Tiếp nhận DATA, lưu vào bộ đệm và phát ACK. */
+    uint32_t zero_window_advertised; /* Kiểm tra tệp đã nhận đủ và gửi FMD5. */
 } transfer_t;
 
-/**
- * @brief Thu don cac tien trinh con da ket thuc sau fork().
- * @param[in] signal_number Ma tin hieu SIGCHLD, khong dung trong ham.
- */
+/* Xử lý toàn bộ frame của một client. */
 static void reap_children(int signal_number)
 {
     (void)signal_number;
@@ -57,14 +60,7 @@ static void reap_children(int signal_number)
     }
 }
 
-/**
- * @brief Phan tich so nguyen trong mot khoang gioi han.
- * @param[in] text Chuoi so can phan tich.
- * @param[in] min Gia tri nho nhat duoc chap nhan.
- * @param[in] max Gia tri lon nhat duoc chap nhan.
- * @param[out] value Noi nhan gia tri da chuyen doi.
- * @return 0 neu hop le, -1 neu chuoi hoac khoang khong hop le.
- */
+/* Phân tích tham số d?ng lệnh. */
 static int parse_unsigned(const char *text, unsigned min, unsigned max,
                           unsigned *value)
 {
@@ -81,12 +77,7 @@ static int parse_unsigned(const char *text, unsigned min, unsigned max,
     return 0;
 }
 
-/**
- * @brief Kiem tra chuoi chi gom ky tu ASCII chu va so.
- * @param[in] data Vung byte chuoi can kiem tra.
- * @param[in] len So byte can kiem tra.
- * @return 1 neu hop le, 0 neu co ky tu khong phai chu hoac so.
- */
+/* Tạo socket, bind, listen và chấp nhận client. */
 static int valid_string(const uint8_t *data, size_t len)
 {
     size_t i;
@@ -98,26 +89,43 @@ static int valid_string(const uint8_t *data, size_t len)
     return 1;
 }
 
-/**
- * @brief Tinh MD5 chuoi, tach chu/so va gui hai frame ket qua.
- * @param[in] fd Socket TCP cua client.
- * @param[in] data Chuoi dau vao dang byte.
- * @param[in] len So byte chuoi.
- * @return 0 neu gui thanh cong, -1 neu socket loi.
- */
-static int send_string_reply(int fd, const uint8_t *data, size_t len)
+/* Server TCP HW7: xử lý chuỗi và truyền tệp tin cậy. */
+static int send_string_reply(int fd, const uint8_t *data, size_t len,
+                             const struct sockaddr_in *peer)
 {
     char md5[33];
     char letters[33];
     char digits[33];
+    char peer_ip[INET_ADDRSTRLEN];
 
     if (!valid_string(data, len)) {
         static const char error[] =
             "Error: String contains non-alphanumeric characters";
+        if (inet_ntop(AF_INET, &peer->sin_addr, peer_ip,
+                      sizeof(peer_ip)) == NULL) {
+            snprintf(peer_ip, sizeof(peer_ip), "unknown");
+        }
+        printf("[%s:%u] Received string: \"%.*s\"\n"
+               "-> %s\n"
+               "Error message sent.\n",
+               peer_ip, (unsigned)ntohs(peer->sin_port), (int)len, data,
+               error);
+        fflush(stdout);
         return send_frame(fd, T_ERR, 0, 0, error, sizeof(error) - 1);
     }
     md5_buf_hex(data, len, md5);
     split_md5(md5, letters, digits);
+    if (inet_ntop(AF_INET, &peer->sin_addr, peer_ip,
+                  sizeof(peer_ip)) == NULL) {
+        snprintf(peer_ip, sizeof(peer_ip), "unknown");
+    }
+    printf("[%s:%u] Received string: \"%.*s\"\n"
+           "MD5 : %s\n"
+           "Letters : %s\n"
+           "Digits  : %s\n",
+           peer_ip, (unsigned)ntohs(peer->sin_port), (int)len, data, md5,
+           letters, digits);
+    fflush(stdout);
     if (send_frame(fd, T_LETTERS, 0, 0, letters,
                    (uint32_t)strlen(letters)) < 0) {
         return -1;
@@ -126,12 +134,7 @@ static int send_string_reply(int fd, const uint8_t *data, size_t len)
                       (uint32_t)strlen(digits));
 }
 
-/**
- * @brief Kiem tra ten file khong chua path traversal hoac byte cam.
- * @param[in] name Ten file khong co ky tu ket thuc '\0' bat buoc.
- * @param[in] len So byte cua ten file.
- * @return 1 neu ten hop le, 0 neu vi pham quy tac ten file.
- */
+/* Hiệp ước frame và các tiện ích dùng chung. */
 static int valid_name(const uint8_t *name, size_t len)
 {
     size_t i;
@@ -148,11 +151,7 @@ static int valid_name(const uint8_t *name, size_t len)
     return 1;
 }
 
-/**
- * @brief Giai phong trang thai truyen file.
- * @param[in,out] transfer Trang thai file can giai phong.
- * @param[in] remove_partial 1 de xoa file dang nhan, 0 de giu file hoan tat.
- */
+/* Thư viện địa chỉ IPv4. */
 static void free_transfer(transfer_t *transfer, int remove_partial)
 {
     unsigned i;
@@ -175,19 +174,7 @@ static void free_transfer(transfer_t *transfer, int remove_partial)
     transfer->slots = NULL;
 }
 
-/**
- * @brief Tao file dich va cap phat buffer vong cho mot giao dich.
- * @param[out] transfer Noi luu trang thai giao dich moi.
- * @param[in] fd Socket TCP cua client.
- * @param[in] buffer_count So o buffer vong.
- * @param[in] drain_ms Do tre ghi moi chunk, tinh bang mili-giay.
- * @param[in] ack_loss Ty le bo ACK mo phong.
- * @param[in] size Kich thuoc file.
- * @param[in] name Ten file goc.
- * @param[in] name_len So byte cua ten file.
- * @param[in] peer Dia chi IPv4 va port cua client.
- * @return 0 neu khoi tao thanh cong, -1 neu loi.
- */
+/* Kiểm tra ký tự chữ và số. */
 static int init_transfer(transfer_t *transfer, int fd, unsigned buffer_count,
                          unsigned drain_ms, unsigned ack_loss,
                          uint64_t size, const uint8_t *name, size_t name_len,
@@ -233,14 +220,14 @@ static int init_transfer(transfer_t *transfer, int fd, unsigned buffer_count,
             return -1;
         }
     }
+    printf("Receiving file: \"%.*s\" (%llu bytes, %u chunks, buffer %u)\n",
+           (int)name_len, name, (unsigned long long)size, transfer->total,
+           buffer_count);
+    fflush(stdout);
     return 0;
 }
 
-/**
- * @brief Gui ACK tich luy va cua so con trong, co the mo phong mat ACK.
- * @param[in,out] transfer Trang thai giao dich can ACK.
- * @return 0 neu gui thanh cong hoac ACK bi mo phong bo, -1 neu send loi.
- */
+/* Mã lỗi hệ thống. */
 static int send_ack(transfer_t *transfer)
 {
     uint32_t available = transfer->next_write + transfer->buffer_count -
@@ -248,22 +235,27 @@ static int send_ack(transfer_t *transfer)
     uint16_t window = available > UINT16_MAX ? UINT16_MAX :
                       (uint16_t)available;
     if (chance((double)transfer->ack_loss)) {
+        transfer->acks_dropped++;
         return 0;
     }
-    return send_frame(transfer->fd, T_ACK, window, transfer->expected, NULL, 0);
+    if (window == 0) {
+        transfer->zero_window_advertised++;
+    }
+    if (send_frame(transfer->fd, T_ACK, window, transfer->expected,
+                   NULL, 0) < 0) {
+        return -1;
+    }
+    transfer->acks_sent++;
+    return 0;
 }
 
-/**
- * @brief Ghi lien tuc cac chunk da du va cap nhat MD5.
- * @param[in,out] transfer Trang thai giao dich va buffer vong.
- * @return 0 neu ghi thanh cong, -1 neu loi ghi file.
- */
+/* Cấu trúc địa chỉ IPv4. */
 static int drain_slots(transfer_t *transfer)
 {
     while (transfer->next_write < transfer->expected) {
         slot_t *slot = &transfer->slots[transfer->next_write %
                                          transfer->buffer_count];
-        if (!slot->present) {
+        if (!slot->present || slot->seq != transfer->next_write) {
             break;
         }
         if (transfer->drain_ms > 0) {
@@ -274,67 +266,94 @@ static int drain_slots(transfer_t *transfer)
         }
         md5_update(transfer->md5, slot->data, slot->len);
         slot->present = 0;
+        transfer->buffered_chunks--;
         transfer->next_write++;
     }
     return 0;
 }
 
-/**
- * @brief Tiep nhan mot frame DATA, luu vao buffer va phat ACK.
- * @param[in,out] transfer Trang thai file dang nhan.
- * @param[in] header Header cua frame DATA da kiem tra CRC.
- * @param[in] payload Payload gom seq 4 byte va du lieu chunk.
- * Chunk den sai thu tu duoc giu lai cho toi khi co du khoang trong.
- * @return 0 neu xu ly thanh cong, -1 neu ghi hoac gui ACK gap loi.
- */
+/* Tối ưu frame ACK ngắn bằng TCP_NODELAY. */
 static int receive_file(transfer_t *transfer, const frame_hdr_t *header,
                         const uint8_t *payload)
 {
     uint32_t seq;
     size_t data_len;
     slot_t *slot;
+    int result;
 
     if (header->len < sizeof(uint32_t)) {
         return 0;
     }
     seq = get32(payload);
     data_len = header->len - sizeof(uint32_t);
-    if (seq >= transfer->total ||
-        data_len == 0 || data_len > CHUNK_SIZE ||
-        seq < transfer->expected ||
-        seq >= transfer->next_write + transfer->buffer_count) {
+    if (seq >= transfer->total || data_len == 0 || data_len > CHUNK_SIZE) {
+        transfer->outside_window++;
         return send_ack(transfer);
     }
+    if (seq < transfer->expected) {
+        transfer->duplicate_chunks++;
+        return send_ack(transfer);
+    }
+    if (seq >= transfer->next_write + transfer->buffer_count) {
+        transfer->outside_window++;
+        return send_ack(transfer);
+    }
+    if (seq > transfer->expected) {
+        transfer->out_of_order++;
+    }
     slot = &transfer->slots[seq % transfer->buffer_count];
-    if (!slot->present) {
-        memcpy(slot->data, payload + sizeof(uint32_t), data_len);
-        slot->len = data_len;
-        slot->present = 1;
-        while (transfer->expected < transfer->total &&
-               transfer->slots[transfer->expected %
-                              transfer->buffer_count].present) {
-            transfer->expected++;
+    if (slot->present && slot->seq == seq) {
+        transfer->duplicate_chunks++;
+        return send_ack(transfer);
+    }
+    if (slot->present) {
+        transfer->outside_window++;
+        return send_ack(transfer);
+    }
+    memcpy(slot->data, payload + sizeof(uint32_t), data_len);
+    slot->len = data_len;
+    slot->seq = seq;
+    slot->present = 1;
+    transfer->received_chunks++;
+    transfer->buffered_chunks++;
+    if (transfer->buffered_chunks > transfer->peak_buffered) {
+        transfer->peak_buffered = transfer->buffered_chunks;
+    }
+    while (transfer->expected < transfer->total &&
+           transfer->slots[transfer->expected %
+                          transfer->buffer_count].present &&
+           transfer->slots[transfer->expected %
+                          transfer->buffer_count].seq == transfer->expected) {
+        transfer->expected++;
+    }
+    result = send_ack(transfer);
+    if (result < 0) {
+        return result;
+    }
+    if (transfer->buffered_chunks >= transfer->buffer_count) {
+        if (drain_slots(transfer) < 0) {
+            return -1;
         }
+        return send_ack(transfer);
     }
-    if (drain_slots(transfer) < 0) {
-        return -1;
-    }
-    return send_ack(transfer);
+    return 0;
 }
 
-/**
- * @brief Kiem tra file da nhan du, ket thuc MD5 va gui FMD5.
- * @param[in,out] transfer Trang thai giao dich da nhan file.
- * @param[in] total Tong so chunk do client bao cao trong FEND.
- * @param[out] md5 Bo dem nhan MD5 32 ky tu hex in hoa.
- * @return 0 neu file hop le va FMD5 gui thanh cong, -1 neu loi.
- */
+/* Chờ dữ liệu trên socket. */
 static int finish_transfer(transfer_t *transfer, uint32_t total,
                            char md5[33])
 {
+    if (drain_slots(transfer) < 0) {
+        return -1;
+    }
     if (total != transfer->total || transfer->expected != transfer->total ||
         transfer->next_write != transfer->total ||
         fflush(transfer->file) != 0) {
+        fprintf(stderr,
+                "Error: incomplete transfer at FEND "
+                "(reported=%u, expected total=%u, next=%u, written=%u).\n",
+                total, transfer->total, transfer->expected,
+                transfer->next_write);
         return -1;
     }
     md5_final_hex(transfer->md5, md5);
@@ -342,35 +361,26 @@ static int finish_transfer(transfer_t *transfer, uint32_t total,
     return send_frame(transfer->fd, T_FMD5, 0, total, md5, 32);
 }
 
-/**
- * @brief Vong lap xu ly mot client cho toi khi dong ket noi/timeout.
- *
- * @param[in] fd Socket client duoc tao boi accept().
- * @param[in] peer Dia chi IPv4 va port cua client.
- * @param[in] buffer_count So o buffer vong cho file.
- * @param[in] drain_ms Do tre ghi moi chunk.
- * @param[in] ack_loss Ty le bo ACK mo phong.
- * Moi giao dich duoc xu ly trong mot frame loop: T_STR, T_FBEGIN, T_DATA,
- * T_PROBE va T_FEND. File dang nhan bi xoa neu phien bi huy.
- */
+/* Tín hiệu tiến trình. */
 static void handle_client(int fd, const struct sockaddr_in *peer,
                           unsigned buffer_count, unsigned drain_ms,
                           unsigned ack_loss)
 {
-    uint8_t payload[MAX_PAYLOAD]; /* Payload cua frame dang nhan */
-    frame_hdr_t header;            /* Header frame sau khi giai ma */
-    transfer_t transfer;           /* Trang thai file dang nhan */
-    int active = 0;                /* 1 khi dang co giao dich FBEGIN/FEND */
+    char peer_ip[INET_ADDRSTRLEN]; /* Nhập xuất chuẩn. */
+    uint8_t payload[MAX_PAYLOAD]; /* Cấp phát bộ nhớ và chuyển đổi số. */
+    frame_hdr_t header;            /* Xử lý chuỗi. */
+    transfer_t transfer;           /* Gọi hệ thống socket. */
+    int active = 0;                /* Thông tin tệp và thư mục. */
 
     memset(&transfer, 0, sizeof(transfer));
     transfer.fd = fd;
-    /* =====================================================================
-     * Step 1: Cho frame voi idle timeout
-     * =====================================================================
-     */
+    if (inet_ntop(AF_INET, &peer->sin_addr, peer_ip, sizeof(peer_ip)) == NULL) {
+        snprintf(peer_ip, sizeof(peer_ip), "unknown");
+    }
+    /* Kiểu dữ liệu hệ thống. */
     for (;;) {
         struct pollfd descriptor = { fd, POLLIN, 0 };
-        int ready = poll(&descriptor, 1, IDLE_MS);
+        int ready = poll(&descriptor, 1, -1);
         int result;
 
         if (ready < 0) {
@@ -383,26 +393,41 @@ static void handle_client(int fd, const struct sockaddr_in *peer,
             fprintf(stderr, "Transfer aborted: client idle timeout.\n");
             break;
         }
-        /*
-         * Hàm recv_frame():
-         *   - Đọc đủ header và payload từ socket TCP.
-         *   - Kiểm tra độ dài và CRC32 trước khi trả dữ liệu cho tầng ứng dụng.
-         *   - RF_OK là frame hợp lệ; RF_CRC/RF_PROTO là frame lỗi.
-         */
+        /* Thu dọn tiến trình con. */
         result = recv_frame(fd, &header, payload);
         if (result == RF_EOF || result == RF_ERR) {
             break;
         }
         if (result == RF_CRC || result == RF_PROTO) {
+            if (active && result == RF_CRC) {
+                transfer.bad_crc++;
+            }
             continue;
         }
-        /* Step 2: Xu ly frame T_STR khi chua co file dang nhan. */
+        /* Các lời gọi hệ thống POSIX. */
         if (!active && header.type == T_STR) {
-            if (header.len <= MAX_STR &&
-                send_string_reply(fd, payload, header.len) < 0) {
+            if (header.len > MAX_STR) {
+                static const char error[] =
+                    "Error: String too long (max 1024 characters)";
+                char peer_ip[INET_ADDRSTRLEN];
+                if (inet_ntop(AF_INET, &peer->sin_addr, peer_ip,
+                              sizeof(peer_ip)) == NULL) {
+                    snprintf(peer_ip, sizeof(peer_ip), "unknown");
+                }
+                printf("[%s:%u] String rejected: length %u exceeds %d.\n",
+                       peer_ip, (unsigned)ntohs(peer->sin_port), header.len,
+                       MAX_STR);
+                fflush(stdout);
+                if (send_frame(fd, T_ERR, 0, 0, error,
+                               sizeof(error) - 1) < 0) {
+                    break;
+                }
+                continue;
+            }
+            if (send_string_reply(fd, payload, header.len, peer) < 0) {
                 break;
             }
-        /* Step 3: Khoi tao giao dich file sau khi nhan FBEGIN. */
+        /* Một ô của bộ đệm vòng, có thể chứa chunk sai thứ tự. */
         } else if (!active && header.type == T_FBEGIN &&
                    header.len > sizeof(uint64_t)) {
             uint64_t size = get64(payload);
@@ -422,17 +447,17 @@ static void handle_client(int fd, const struct sockaddr_in *peer,
             if (send_ack(&transfer) < 0) {
                 break;
             }
-        /* Step 4: Nhan DATA, luu buffer va ghi chunk theo thu tu. */
+        /* Trạng thái của một tệp đang được nhận. */
         } else if (active && header.type == T_DATA) {
             if (receive_file(&transfer, &header, payload) < 0) {
                 break;
             }
-        /* Step 5: Tra ACK hien tai khi client gui PROBE. */
+        /* Các bộ đếm thống kê của giao dịch. */
         } else if (active && header.type == T_PROBE) {
             if (send_ack(&transfer) < 0) {
                 break;
             }
-        /* Step 6: Ket thuc file, tinh MD5 va gui FMD5. */
+        /* Phân tích tham số trong khoảng cho phép. */
         } else if (active && header.type == T_FEND) {
             char md5[33];
             if (finish_transfer(&transfer, header.seq, md5) < 0) {
@@ -440,50 +465,72 @@ static void handle_client(int fd, const struct sockaddr_in *peer,
             }
             printf("Saved at: %s\nFile size: %llu bytes\nMD5: %s\n",
                    transfer.path, (unsigned long long)transfer.size, md5);
+            if (transfer.size <= 65536) {
+                FILE *preview = fopen(transfer.path, "rb");
+                if (preview != NULL) {
+                    unsigned char text[65536];
+                    size_t n = fread(text, 1, sizeof(text), preview);
+                    int printable = 1;
+                    size_t i;
+                    for (i = 0; i < n; ++i) {
+                        if (text[i] != '\n' && text[i] != '\r' &&
+                            text[i] != '\t' &&
+                            (text[i] < 32 || text[i] > 126)) {
+                            printable = 0;
+                            break;
+                        }
+                    }
+                    if (printable && n > 0) {
+                        printf("Content:\n");
+                        fwrite(text, 1, n, stdout);
+                        if (n == 0 || text[n - 1] != '\n') {
+                            putchar('\n');
+                        }
+                    }
+                    fclose(preview);
+                }
+            }
+            printf("Chunks     : %u total, %u duplicate, %u out-of-order, "
+                   "%u bad CRC, %u outside window\n",
+                   transfer.total, transfer.duplicate_chunks,
+                   transfer.out_of_order, transfer.bad_crc,
+                   transfer.outside_window);
+            printf("Buffer     : %u chunks, peak %u, zero window advertised %u times\n"
+                   "ACKs       : %u sent, %u dropped (simulated)\n",
+                   transfer.buffer_count, transfer.peak_buffered,
+                   transfer.zero_window_advertised, transfer.acks_sent,
+                   transfer.acks_dropped);
+            fflush(stdout);
             free_transfer(&transfer, 0);
             memset(&transfer, 0, sizeof(transfer));
             transfer.fd = fd;
             active = 0;
         }
     }
-    /* Step 7: Dong file, giai phong buffer va xoa file neu dang dang do. */
+    /* Kiểm tra chuỗi chỉ gồm chữ và số ASCII. */
     if (active) {
         free_transfer(&transfer, 1);
     } else {
         free_transfer(&transfer, 0);
     }
+    printf("[%s:%u] Client disconnected.\n", peer_ip,
+           (unsigned)ntohs(peer->sin_port));
+    fflush(stdout);
     close(fd);
 }
 
-/**
- * @brief Khoi tao TCP server, lang nghe va fork xu ly client.
- *
- * Chi tiet luong xu ly:
- *   - Buoc 1: Kiem tra Port, BufferChunks, DrainMs va AckLoss%.
- *   - Buoc 2: Tao socket TCP IPv4 va cho phep tai su dung dia chi.
- *   - Buoc 3: Bind socket vao cong, sau do listen() cho client.
- *   - Buoc 4: accept() ket noi va fork() mot tien trinh con xu ly.
- *   - Buoc 5: Tien trinh cha tiep tuc accept, tien trinh con dong socket
- *     server va xu ly frame bang handle_client().
- *
- * @return int:
- *   - 0 neu server ket thuc theo luong binh thuong.
- *   - EXIT_FAILURE neu tham so hoac system call khoi tao bi loi.
- */
+/* Tính MD5 chuỗi và gửi kết quả. */
 int main(int argc, char **argv)
 {
-    struct sockaddr_in address; /* Dia chi IPv4 ma server se bind */
-    struct sigaction action;    /* Cau hinh thu don tien trinh con */
-    unsigned port;              /* Cong TCP server */
-    unsigned buffer_count = DEFAULT_BUF; /* So o buffer vong moi client */
-    unsigned drain_ms = 0;      /* Do tre ghi moi chunk, don vi mili-giay */
-    unsigned ack_loss = 0;      /* Ty le bo ACK mo phong */
-    int server_fd;              /* File descriptor socket lang nghe */
+    struct sockaddr_in address; /* Kiểm tra tên tệp an toàn, không chứa path traversal. */
+    struct sigaction action;    /* Giải phóng trạng thái truyền tệp. */
+    unsigned port;              /* Khởi tạo tệp đích và bộ đệm vòng. */
+    unsigned buffer_count = DEFAULT_BUF; /* Gửi ACK tích lũy và cửa sổ còn tr?ng. */
+    unsigned drain_ms = 0;      /* Ghi các chunk đã đủ và cập nhật MD5. */
+    unsigned ack_loss = 0;      /* Tiếp nhận DATA, lưu vào bộ đệm và phát ACK. */
+    int server_fd;              /* Kiểm tra tệp đã nhận đủ và gửi FMD5. */
 
-    /* =====================================================================
-     * Step 1: Kiem tra tham so dong lenh
-     * =====================================================================
-     */
+    /* Xử lý toàn bộ frame của một client. */
     if (argc < 2 || argc > 5 ||
         parse_unsigned(argv[1], 1, 65535, &port) < 0 ||
         (argc > 2 && parse_unsigned(argv[2], 1, UINT16_MAX, &buffer_count) < 0) ||
@@ -499,59 +546,32 @@ int main(int argc, char **argv)
     sigaction(SIGCHLD, &action, NULL);
     signal(SIGPIPE, SIG_IGN);
 
-    /* =====================================================================
-     * Step 2: Tao socket TCP IPv4
-     * =====================================================================
-     */
-    /*
-     * Hàm socket():
-     *   - AF_INET: dùng địa chỉ IPv4.
-     *   - SOCK_STREAM: dùng TCP, có kết nối và truyền byte theo thứ tự.
-     *   - 0: chọn giao thức TCP mặc định.
-     *   - Trả về descriptor >= 0 nếu thành công, -1 nếu lỗi.
-     */
+    /* Phân tích tham số d?ng lệnh. */
+    /* Tạo socket, bind, listen và chấp nhận client. */
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
-        /* perror() in nguyên nhân lỗi của system call socket(). */
+        /* Server TCP HW7: xử lý chuỗi và truyền tệp tin cậy. */
         perror("socket");
         return EXIT_FAILURE;
     }
     {
-        int reuse = 1; /* Cho phep bind lai cong sau khi server vua dung */
-        /*
-         * setsockopt() cấu hình thuộc tính socket.
-         * SO_REUSEADDR giúp server bind lại địa chỉ/cổng đang ở trạng thái
-         * chờ sau khi chương trình trước đó vừa đóng.
-         */
+        int reuse = 1; /* Hiệp ước frame và các tiện ích dùng chung. */
+        /* Thư viện địa chỉ IPv4. */
         setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
     }
 
-    /* =====================================================================
-     * Step 3: Thiet lap dia chi va bind socket
-     * =====================================================================
-     */
+    /* Kiểm tra ký tự chữ và số. */
     memset(&address, 0, sizeof(address));
-    address.sin_family = AF_INET;             /* Họ địa chỉ IPv4 */
-    address.sin_addr.s_addr = htonl(INADDR_ANY); /* Nhận kết nối trên mọi IP */
-    address.sin_port = htons((uint16_t)port); /* Đổi port host sang network order */
-    /*
-     * Hàm bind():
-     *   - server_fd: socket cần gắn địa chỉ.
-     *   - &address: IP và port server muốn sử dụng.
-     *   - sizeof(address): kích thước cấu trúc sockaddr_in.
-     *   - Trả về 0 nếu bind thành công, -1 nếu port bận hoặc lỗi.
-     */
+    address.sin_family = AF_INET;             /* Mã lỗi hệ thống. */
+    address.sin_addr.s_addr = htonl(INADDR_ANY); /* Cấu trúc địa chỉ IPv4. */
+    address.sin_port = htons((uint16_t)port); /* Tối ưu frame ACK ngắn bằng TCP_NODELAY. */
+    /* Chờ dữ liệu trên socket. */
     if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
         perror("bind");
         close(server_fd);
         return EXIT_FAILURE;
     }
-    /*
-     * Hàm listen():
-     *   - server_fd: socket đã bind.
-     *   - 16: số kết nối tối đa chờ trong hàng đợi chưa accept.
-     *   - Trả về 0 nếu bắt đầu lắng nghe thành công, -1 nếu lỗi.
-     */
+    /* Tín hiệu tiến trình. */
     if (listen(server_fd, 16) < 0) {
         perror("bind/listen");
         close(server_fd);
@@ -559,20 +579,11 @@ int main(int argc, char **argv)
     }
     printf("TCP server started at port %u. Waiting for clients...\n", port);
 
-    /* =====================================================================
-     * Step 4: Accept va fork xu ly nhieu client
-     * =====================================================================
-     */
+    /* Nhập xuất chuẩn. */
     for (;;) {
-        struct sockaddr_in peer; /* Dia chi client vua ket noi */
-        socklen_t peer_len = sizeof(peer); /* Kich thuoc cau truc dia chi */
-        /*
-         * Hàm accept():
-         *   - server_fd: socket đang listen.
-         *   - &peer: nơi nhận IP và port của client.
-         *   - &peer_len: kích thước vào/ra của cấu trúc peer.
-         *   - Trả về socket client riêng nếu thành công, -1 nếu lỗi.
-         */
+        struct sockaddr_in peer; /* Cấp phát bộ nhớ và chuyển đổi số. */
+        socklen_t peer_len = sizeof(peer); /* Xử lý chuỗi. */
+        /* Gọi hệ thống socket. */
         int client_fd = accept(server_fd, (struct sockaddr *)&peer, &peer_len);
         if (client_fd < 0) {
             if (errno == EINTR) {
@@ -581,22 +592,43 @@ int main(int argc, char **argv)
             perror("accept");
             break;
         }
-        /*
-         * Hàm fork():
-         *   - Tạo tiến trình con sao chép trạng thái hiện tại.
-         *   - Trả về 0 trong tiến trình con, PID con trong tiến trình cha,
-         *     và -1 nếu không tạo được tiến trình.
-         */
-        if (fork() == 0) {
-            /* Tien trinh con khong can socket lang nghe cua tien trinh cha. */
+        {
+            int no_delay = 1; /* Thông tin tệp và thư mục. */
+            /* Kiểu dữ liệu hệ thống. */
+            if (setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY,
+                           &no_delay, sizeof(no_delay)) < 0) {
+                perror("setsockopt(TCP_NODELAY)");
+                close(client_fd);
+                continue;
+            }
+        }
+        {
+            char peer_ip[INET_ADDRSTRLEN]; /* Thu dọn tiến trình con. */
+            if (inet_ntop(AF_INET, &peer.sin_addr, peer_ip,
+                          sizeof(peer_ip)) == NULL) {
+                snprintf(peer_ip, sizeof(peer_ip), "unknown");
+            }
+            printf("[%s:%u] Client connected.\n", peer_ip,
+                   (unsigned)ntohs(peer.sin_port));
+            fflush(stdout);
+        }
+        /* Các lời gọi hệ thống POSIX. */
+        {
+            pid_t child_pid = fork();
+            if (child_pid == 0) {
+            /* Một ô của bộ đệm vòng, có thể chứa chunk sai thứ tự. */
             close(server_fd);
             handle_client(client_fd, &peer, buffer_count, drain_ms, ack_loss);
             _exit(EXIT_SUCCESS);
+            }
+            if (child_pid < 0) {
+                perror("fork");
+            }
         }
-        /* Tien trinh cha chi giu server_fd va dong client_fd da giao con. */
+        /* Trạng thái của một tệp đang được nhận. */
         close(client_fd);
     }
-    /* Dong socket lang nghe neu vong accept ket thuc do loi. */
+    /* Các bộ đếm thống kê của giao dịch. */
     close(server_fd);
     return EXIT_FAILURE;
 }

@@ -1,9 +1,9 @@
-## HW7 build rules: server/client dung chung net.c va util.c.
-CC ?= gcc # Trinh bien dich C su dung tren Linux
-CFLAGS ?= -D_FILE_OFFSET_BITS=64 -std=c11 -Wall -Wextra -Werror -O2 # Co bien dich
-LDLIBS ?= -lcrypto # Thu vien OpenSSL EVP dung cho MD5
+## HW7 build rules: server/client d?ng chung net.c va util.c.
+CC ?= gcc # Tr?nh bi?n d?ch C s? d?ng tren Linux
+CFLAGS ?= -D_FILE_OFFSET_BITS=64 -std=c11 -Wall -Wextra -Werror -O2 # C? bi?n d?ch
+LDLIBS ?= -lcrypto # Th? vi?n OpenSSL EVP d?ng cho MD5
 
-COMMON = net.o util.o # Cac object dung chung cho server va client
+COMMON = net.o util.o # Cac object d?ng chung cho server va client
 
 .PHONY: all clean asan
 

@@ -1,22 +1,22 @@
 /*
- * util.c - Cac tien ich dung chung cua HW7:
+ * util.c - Cac tien ich d?ng chung cua HW7:
  * CRC32, dong ho don dieu, mo phong loi va tinh MD5 bang OpenSSL EVP.
  */
 #define _GNU_SOURCE
-#include "proto.h"          /* Cac khai bao giao thuc va kieu MD5 */
-#include <errno.h>          /* errno va EINTR khi doc file */
-#include <openssl/evp.h>    /* API EVP dung de tinh MD5 */
-#include <stdio.h>          /* sprintf tao chuoi MD5 dang hex */
-#include <stdlib.h>         /* rand va RAND_MAX cho mo phong loi */
-#include <time.h>           /* clock_gettime va CLOCK_MONOTONIC */
-#include <unistd.h>         /* pread doc file theo offset */
+#include "proto.h"          /* C?c khai b?o giao th?c v? ki?u MD5 */
+#include <errno.h>          /* errno v? EINTR khi doc t?p */
+#include <openssl/evp.h>    /* API EVP d?ng ?? t?nh MD5 */
+#include <stdio.h>          /* sprintf t?o chu?i MD5 d?ng hex */
+#include <stdlib.h>         /* rand v? RAND_MAX cho m? ph?ng l?i */
+#include <time.h>           /* clock_gettime v? CLOCK_MONOTONIC */
+#include <unistd.h>         /* pread doc t?p theo offset */
 
 /**
- * @brief Tinh CRC32 cho mot vung du lieu.
- * @param[in] data Vung du lieu can tinh CRC.
- * @param[in] n So byte cua vung du lieu.
+ * @brief Tinh CRC32 cho mot vung d? li?u.
+ * @param[in] data Vung d? li?u can tinh CRC.
+ * @param[in] n So byte cua vung d? li?u.
  * @param[in] crc Gia tri CRC truoc do, cho phep tinh noi tiep.
- * @return Gia tri CRC32 sau khi xu ly vung du lieu.
+ * @return Gia tri CRC32 sau khi xu ly vung d? li?u.
  */
 uint32_t crc32_calc(const void *data, size_t n, uint32_t crc)
 {
@@ -50,9 +50,9 @@ long long now_ms(void)
 }
 
 /**
- * @brief Tra ve true theo mot xac suat de mo phong loi mang.
- * @param[in] percent Xac suat trong khoang 0..100.
- * @return 1 neu su kien xay ra, 0 neu khong.
+ * @brief Tr? ve true theo mot xac s?at de mo phong loi mang.
+ * @param[in] percent Xac s?at trong kho?ng 0..100.
+ * @return 1 neu s? kien xay ra, 0 neu khong.
  */
 int chance(double percent)
 {
@@ -75,7 +75,7 @@ md5_t *md5_new(void)
 /**
  * @brief Nap them n byte vao bo dem MD5.
  * @param[in,out] m Context MD5 dang xu ly.
- * @param[in] data Vung du lieu can nap.
+ * @param[in] data Vung d? li?u can nap.
  * @param[in] n So byte can nap.
  */
 void md5_update(md5_t *m, const void *data, size_t n)
@@ -86,7 +86,7 @@ void md5_update(md5_t *m, const void *data, size_t n)
 /**
  * @brief Ket thuc MD5, ghi 32 ky tu hex in hoa va giai phong context.
  * @param[in,out] m Context MD5; ham se giai phong context nay.
- * @param[out] out Bo dem phai co it nhat 33 byte.
+ * @param[out] out Bo dem phai co ?t nh?t 33 byte.
  */
 void md5_final_hex(md5_t *m, char out[33])
 {
@@ -101,9 +101,9 @@ void md5_final_hex(md5_t *m, char out[33])
 
 /**
  * @brief Tinh MD5 cho mot vung nho va tra ve dang hex in hoa.
- * @param[in] data Vung du lieu dau vao.
+ * @param[in] data Vung d? li?u dau vao.
  * @param[in] n So byte dau vao.
- * @param[out] out Bo dem phai co it nhat 33 byte.
+ * @param[out] out Bo dem phai co ?t nh?t 33 byte.
  */
 void md5_buf_hex(const void *data, size_t n, char out[33])
 {
@@ -115,8 +115,8 @@ void md5_buf_hex(const void *data, size_t n, char out[33])
 /**
  * @brief Tinh MD5 file theo tung block, khong nap ca file vao RAM.
  * @param[in] fd File descriptor da mo de doc.
- * @param[out] out Bo dem phai co it nhat 33 byte.
- * @return 0 neu thanh cong, -1 neu pread() gap loi.
+ * @param[out] out Bo dem phai co ?t nh?t 33 byte.
+ * @return 0 neu th?nh cung, -1 neu pread() gap loi.
  */
 int md5_fd_hex(int fd, char out[33])
 {

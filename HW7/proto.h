@@ -9,20 +9,19 @@
 
 #include <stddef.h>       /* Kiểu size_t, dùng cho kích thước bộ đệm */
 #include <stdint.h>       /* Các kiểu số nguyên có kích thước cố định */
-#include <sys/types.h>    /* Kiểu ssize_t dùng cho hàm I/O */
+#include <sys/types.h>    /* Kiểu ssize_t dùng cho hàm I/? */
 
 /* ---- Tham số giao thức ---- */
-#define CHUNK_SIZE    4096               /* Số byte dữ liệu tối đa trong một DATA */
-#define HDR_LEN       16                 /* Độ dài header của một frame */
-#define MAX_PAYLOAD   (CHUNK_SIZE + 512) /* Kích thước payload lớn nhất */
+#define CHUNK_SIZE    4096               /* Số byte dữ liệu tối đa trong một D? li?u */
+#define HDR_LEN       16                 /* Độ dài ti?u ?? của một frame */
+#define MAX_PAYLOAD   (CHUNK_SIZE + 512) /* Kích thước d? li?u t?i lớn nhất */
 #define MAX_STR       1024               /* Độ dài tối đa của chuỗi mode 1 */
 #define MAX_NAME      255                /* Độ dài tối đa của tên tệp */
 #define DEFAULT_BUF   16                 /* Số ô bộ đệm mặc định của server */
 #define MAX_INFLIGHT  256                /* Số chunk tối đa đang chờ ACK */
-#define RTO_INIT_MS   200                /* RTO ban đầu, tính bằng mili-giây */
+#define RTO_INIT_MS   200                /* RTO b?n đầu, tính bằng mili-giây */
 #define RTO_MAX_MS    3000               /* RTO lớn nhất, tính bằng mili-giây */
-#define PERSIST_MS    200                /* Chu kỳ gửi PROBE khi cửa sổ bằng 0 */
-#define IDLE_MS       30000              /* Thời gian server chờ client im lặng */
+#define PERSIST_MS    200                /* Ch? kỳ gửi PROBE khi cửa sổ bằng 0 */
 
 /* Loại frame và hướng trao đổi trong giao thức ứng dụng. */
 enum frame_type {
@@ -41,7 +40,7 @@ enum frame_type {
 /* Mã trả về của recv_frame(). */
 #define RF_OK     0
 #define RF_EOF   (-1)   /* Đóng kết nối đúng ranh giới khung            */
-#define RF_ERR   (-2)   /* Lỗi I/O hoặc đứt giữa chừng                  */
+#define RF_ERR   (-2)   /* Lỗi I/? hoặc đứt giữa chừng                  */
 #define RF_CRC   (-3)   /* Khung đủ độ dài nhưng sai CRC32              */
 #define RF_PROTO (-4)   /* Độ dài vượt MAX_PAYLOAD                     */
 
@@ -50,7 +49,7 @@ typedef struct {
    uint8_t  flags; /* Cờ điều khiển, hiện dành cho mở rộng */
    uint16_t wnd;   /* Số ô bộ đệm còn trống, dùng trong ACK */
    uint32_t seq;   /* Số thứ tự chunk hoặc giá trị điều khiển */
-   uint32_t len;   /* Số byte payload của frame */
+   uint32_t len;   /* Số byte d? li?u t?i của frame */
 } frame_hdr_t;
 
 /* ---- Đọc/ghi số nguyên big-endian, không ghi trực tiếp struct lên socket ---- */
@@ -175,7 +174,7 @@ long long now_ms(void);
 
 /**
 * @brief Tạo kết quả ngẫu nhiên theo phần trăm để mô phỏng lỗi.
-* @param[in] percent Xác suất từ 0 đến 100.
+* @param[in] percent Xác s?ất từ 0 đến 100.
 * @return 1 nếu sự kiện xảy ra, 0 nếu không xảy ra.
 */
 int       chance(double percent);
@@ -212,7 +211,7 @@ void   md5_final_hex(md5_t *m, char out[33]);
 void   md5_buf_hex(const void *data, size_t n, char out[33]);
 
 /**
-* @brief Tính MD5 cho toàn bộ nội dung tệp đã mở sẵn.
+* @brief Tính MD5 cho toàn bộ nội d?ng tệp đã mở sẵn.
 * @param[in] fd File descriptor đang trỏ đến tệp cần đọc.
 * @param[out] out Bộ đệm phải có ít nhất 33 byte, kết quả hex in hoa.
 * @return 0 nếu đọc và băm thành công, -1 nếu read() hoặc khởi tạo MD5 lỗi.
